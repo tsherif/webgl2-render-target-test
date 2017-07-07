@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<!--
+  The MIT License (MIT)
+
+  Copyright (c) 2017 Tarek Sherif
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of
+  this software and associated documentation files (the "Software"), to deal in
+  the Software without restriction, including without limitation the rights to
+  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+  the Software, and to permit persons to whom the Software is furnished to do so,
+  subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+  FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+  IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
+<html>
+<head>
+    <title>Float Render Target Precision Test</title>
+    <script src="picogl.js"></script>
+    <style>
+        html {
+            overflow: hidden;
+        }
+
+        body {
+            margin: 0;
+        }
+
+        #description {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+        }
+
+        .red {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div id="description">
+        Test if GPU is providing full precision for 16F and 32F render targets using WEBGL_color_buffer_float.<BR>
+        From left to right, the triangles indicate whether the render targets were able to store 2<sup>-8</sup>, 2<sup>-24</sup> (float16 min), 2<sup>-64</sup>, 2<sup>-126</sup> (float32 min).<BR>
+        Top row reads from an RGBA (unsigned byte) render target. Expected colors: <span class="red">red</span>, black, black, black.<BR>
+        Middle row reads from an RGBA16F render target. Expected colors: <span class="red">red</span>, <span class="red">red</span>, black, black.<BR>
+        Bottom row reads from an RGBA32F render target. Expected colors: <span class="red">red</span>, <span class="red">red</span>, <span class="red">red</span>, <span class="red">red</span>.<BR>
+    </div>
+    <canvas id="gl-canvas"></canvas>
+    <script type="x-shader/vs" id="vertex-quad">
+        #version 300 es
+
+        layout(location=0) in vec4 position;
+        
+        void main() {
+            gl_Position = position;
+        }
+    </script>
+    <script type="x-shader/vs" id="fragment-tex">
+        #version 300 es
+        precision highp float;
+            
+        out vec4 fragColor;
+        void main() {
+            fragColor = vec4(
+                1.0 / 256.0,                    // 2^-8 (byte min)
+                1.0 / 16777216.0,               // 2^-24 (Float16 Min)
+                1.0 / 18446744073709552000.0,   // 2^-64
+                1.0 / 8.507059173023462e+37     // 2^-126 (Float32 Min)
+            );
+        }
+    </script>
+    <script type="shader/vs" id="vs">
+        #version 300 es
+        
+        layout(location=0) in vec4 position;
+        layout(location=1) in float xOffset;
+        layout(location=2) in int colorIndex;
+
+        uniform float yOffset;
+        
+        flat out int vColorIndex;
+        void main() {
+            vColorIndex = colorIndex;
+            gl_Position = position;
+            gl_Position.x += xOffset;
+            gl_Position.y += yOffset;
+        }
+    </script>
+    <script type="shader/fs" id="fs">
+        #version 300 es
+        precision highp float;
+
+        uniform sampler2D tex;
+
+        const float multiplier[] = float[](
+            256.0, 
+            16777216.0, 
+            18446744073709552000.0, 
+            8.507059173023462e+37
+        );
+
+        flat in int vColorIndex;
+
+        out vec4 fragColor;
+        void main() {
+            fragColor = vec4(texture(tex, vec2(0.0))[vColorIndex] * multiplier[vColorIndex], 0.0, 0.0, 1.0);
+        }
+    </script>
+    
+    <script type="text/javascript">
+        var canvas = document.getElementById("gl-canvas");
+
+        if (!canvas.getContext("webgl2")) {
+            console.error("WebGL 2 not available");
+            document.body.innerHTML = "This example requires WebGL 2 which is unavailable on this system."
+        }
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        var app = PicoGL.createApp(canvas)
+        .clearColor(1.0, 1.0, 1.0, 1.0)
+        .floatRenderTargets();
+
+        if (!app.floatRenderTargetsEnabled) {
+            document.body.innerHTML = "This example requires extension EXT_color_buffer_float which is not supported on this system."
+        }
+
+        window.onresize = function() {
+            app.resize(window.innerWidth, window.innerHeight);
+        }
+
+        // Program to draw small floating point numbers to texture to test limits
+        var textureVSSource =  document.getElementById("vertex-quad").text.trim();
+        var textureFSSource =  document.getElementById("fragment-tex").text.trim();              
+        var textureProgram = app.createProgram(textureVSSource, textureFSSource);
+
+        // Program to draw triangles using texture colors
+        var triangleVSSource =  document.getElementById("vs").text.trim();
+        var triangleFSSource =  document.getElementById("fs").text.trim();             
+        var triangleProgram = app.createProgram(triangleVSSource, triangleFSSource);
+
+        // Framebuffers of varying precision
+        var byteFramebuffer = app.createFramebuffer(1, 1).colorTarget(0);
+        var float16Framebuffer = app.createFramebuffer(1, 1).colorTarget(0, { type: PicoGL.FLOAT, internalFormat: PicoGL.RGBA16F });
+        var float32Framebuffer = app.createFramebuffer(1, 1).colorTarget(0, { type: PicoGL.FLOAT, internalFormat: PicoGL.RGBA32F });
+
+        // Quad geometry
+        var quadPositions = app.createVertexBuffer(PicoGL.FLOAT, 2, new Float32Array([
+            -1, 1,
+            -1, -1,
+            1, -1,
+            -1, 1,
+            1, -1,
+            1, 1,
+        ]));
+
+        var quadArray = app.createVertexArray()
+        .attributeBuffer(0, quadPositions);
+
+        // Triangle geometry (instanced)
+        var positions = app.createVertexBuffer(PicoGL.FLOAT, 2, new Float32Array([
+            -0.1, -0.1,
+             0.1, -0.1,
+             0.0, 0.1
+        ]));
+
+        var xOffsets = app.createVertexBuffer(PicoGL.FLOAT, 1, new Float32Array([
+            -0.6,
+             -0.2,
+             0.2,
+             0.6
+        ]));
+
+        var colorIndices = app.createVertexBuffer(PicoGL.INT, 1, new Int32Array([
+            0, 1, 2, 3
+        ]));
+
+        var triangleArray = app.createVertexArray()
+        .vertexAttributeBuffer(0, positions)
+        .instanceAttributeBuffer(1, xOffsets)
+        .instanceAttributeBuffer(2, colorIndices);
+
+        var texDrawCall = app.createDrawCall(textureProgram, quadArray);
+
+        var triangleDrawCall = app.createDrawCall(triangleProgram, triangleArray)
+        .texture("tex", float32Framebuffer.colorTextures[0]);
+
+
+
+
+        app.drawCalls([texDrawCall])
+        .drawFramebuffer(byteFramebuffer)
+        .draw()
+        .drawFramebuffer(float16Framebuffer)
+        .draw()
+        .drawFramebuffer(float32Framebuffer)
+        .draw()
+
+        app.defaultDrawFramebuffer()
+        .drawCalls([triangleDrawCall])
+        .clear();
+
+        triangleDrawCall.texture("tex", byteFramebuffer.colorTextures[0])
+        .uniform("yOffset", 0.5);
+
+        app.draw();
+
+        triangleDrawCall.texture("tex", float16Framebuffer.colorTextures[0])
+        .uniform("yOffset", 0.0);
+
+        app.draw();
+
+        triangleDrawCall.texture("tex", float32Framebuffer.colorTextures[0])
+        .uniform("yOffset", -0.5);
+
+        app.draw();
+
+        // CLEANUP
+        textureProgram.delete();
+        triangleProgram.delete();
+        positions.delete();
+        xOffsets.delete();
+        colorIndices.delete();
+        quadArray.delete();
+        triangleArray.delete();
+        byteFramebuffer.delete();
+        float16Framebuffer.delete();
+        float32Framebuffer.delete();
+
+    </script>
+</body>
+</html>
